@@ -10,40 +10,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1) 최신 main 체크아웃 (정확한 커밋 보장)
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
 
-      # 2) Python 세팅
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      # 3) 의존성 설치 (v1+v2 함께 사용)
       - name: Install Python dependencies
         shell: bash
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
-          # v2 SDK (엔드포인트 조작)
           pip install "azure-ai-ml>=1.19.0" "azure-identity>=1.16.0"
-          # v1 SDK (Legacy Dataset 다운로드) + 필수 런타임
           pip install "azureml-core==1.54.0" "azureml-dataset-runtime==1.54.0"
-          # 인증 경고 해소
           pip install "msal-extensions>=1.2.0"
-          # 데이터/평가용
           pip install pandas numpy scikit-learn requests pyarrow
-      
 
-      # 4) Azure 로그인 (Service Principal JSON)
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_INFO }}
 
-      # 5) 구독ID 환경변수로 노출 (v1/v2 공통)
       - name: Export subscription id
         shell: bash
         run: |
@@ -51,7 +41,6 @@ jobs:
           echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
           az account show
 
-      # 6) 비교 & 승격 실행
       - name: Compare & Promote
         env:
           AZ_RESOURCE_GROUP: "1dt-final-team4"
@@ -61,14 +50,14 @@ jobs:
           DATA_ASSET_VERSION: "1"
 
           LABEL_COL: "realScore_clean"
-          # FEATURE_COLS: "col1,col2,..."  # 필요 시 명시(미지정 시 label 제외 전체 사용)
+          # FEATURE_COLS: "col1,col2,..."  
 
           ENDPOINT_NAME: "team4-rt-ab"
           ENDPOINT_URL: "https://team4-rt-ab.eastus2.inference.ml.azure.com/score"
           API_KEY: ${{ secrets.AML_ENDPOINT_KEY }}
 
-          DEPLOYMENT_A: "final0922-1"   # Champion
-          DEPLOYMENT_B: "final0922-2"   # Challenger
+          DEPLOYMENT_A: "predrealscore-1"
+          DEPLOYMENT_B: "predrealscore-2"
 
           PROMOTE_RULE: "rmse<=0.98 and r2>=-0.01"
         run: |
