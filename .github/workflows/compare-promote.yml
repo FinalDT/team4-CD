@@ -10,8 +10,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1) 코드 체크아웃
+      # 1) 최신 main 체크아웃 (정확한 커밋 보장)
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
 
       # 2) Python 세팅
       - uses: actions/setup-python@v5
@@ -42,15 +45,21 @@ jobs:
           echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
           az account show
 
-      # 6) 스크립트 가드 (예전 CLI download 호출 방지)
-      - name: Sanity check: script guard
+      # 6) 최신 SDK-only 스크립트가 맞는지 확인 + 구버전(az ml data download) 차단
+      - name: Assert we are running the latest SDK-only script
         shell: bash
         run: |
           set -euxo pipefail
-          echo "==== script head ===="
-          sed -n '1,120p' scripts/compare_and_promote_from_data_asset.py || true
-          echo "==== grep for forbidden CLI download ===="
-          ! grep -R "az[[:space:]]\+ml[[:space:]]\+data[[:space:]]\+download" -n scripts || (echo "ERROR: CLI download still present"; exit 1)
+          echo "Commit: $GITHUB_SHA"
+          git log -1 --oneline
+          echo "==== file path ===="
+          ls -l scripts/compare_and_promote_from_data_asset.py
+          echo "==== first 150 lines of script ===="
+          sed -n '1,150p' scripts/compare_and_promote_from_data_asset.py
+          echo "==== guard: forbid CLI data download ===="
+          if grep -R -nE 'az[[:space:]]+ml[[:space:]]+data[[:space:]]+download' scripts/compare_and_promote_from_data_asset.py; then
+            echo 'ERROR: Found legacy "az ml data download" in the script'; exit 1
+          fi
 
       # 7) 비교 & 승격 실행
       - name: Compare & Promote
@@ -62,7 +71,7 @@ jobs:
           DATA_ASSET_VERSION: "1"
 
           LABEL_COL: "realScore_clean"
-          # FEATURE_COLS: "col1,col2,..."  # 필요 시 명시 (미지정 시 label 제외 전체 사용)
+          # FEATURE_COLS: "col1,col2,..."  # 필요 시 명시(미지정 시 label 제외 전체 사용)
 
           ENDPOINT_NAME: "team4-rt-ab"
           ENDPOINT_URL: "https://team4-rt-ab.eastus2.inference.ml.azure.com/score"
