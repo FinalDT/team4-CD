@@ -45,21 +45,6 @@ jobs:
           echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
           az account show
 
-      # 6) 최신 SDK-only 스크립트가 맞는지 확인 + 구버전(az ml data download) 차단
-      - name: Assert we are running the latest SDK-only script
-        shell: bash
-        run: |
-          set -euxo pipefail
-          echo "Commit: $GITHUB_SHA"
-          git log -1 --oneline
-          echo "==== file path ===="
-          ls -l scripts/compare_and_promote_from_data_asset.py
-          echo "==== first 150 lines of script ===="
-          sed -n '1,150p' scripts/compare_and_promote_from_data_asset.py
-          echo "==== guard: forbid CLI data download ===="
-          if grep -R -nE 'az[[:space:]]+ml[[:space:]]+data[[:space:]]+download' scripts/compare_and_promote_from_data_asset.py; then
-            echo 'ERROR: Found legacy "az ml data download" in the script'; exit 1
-          fi
 
       # 7) 비교 & 승격 실행
       - name: Compare & Promote
