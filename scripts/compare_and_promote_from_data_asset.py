@@ -2,6 +2,10 @@ import os, json, math, time, subprocess, glob, sys
 import numpy as np, pandas as pd, requests
 from sklearn.metrics import mean_squared_error, r2_score
 
+# ✅ 추가: SDK import
+from azure.identity import AzureCliCredential
+from azure.ai.ml import MLClient
+
 # 환경변수 세팅 (GitHub Actions에서 주입)
 RG  = os.getenv("AZ_RESOURCE_GROUP")
 WS  = os.getenv("AZ_ML_WORKSPACE")
@@ -20,13 +24,27 @@ def run_az(cmd:list):
     r = subprocess.run(["az",*cmd], check=True, text=True, capture_output=True)
     return r.stdout
 
+# ✅ 교체: CLI → SDK 방식으로 데이터 에셋 다운로드
 def download_data_asset(name, version, out_dir="./_aml_data"):
+    """
+    GitHub Actions에서 azure/login으로 이미 로그인된 세션을 SDK가 사용하도록 AzureCliCredential() 사용.
+    워크플로에서 SUBSCRIPTION_ID를 $GITHUB_ENV에 넣어 주세요:
+      echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
+    """
     os.makedirs(out_dir, exist_ok=True)
-    run_az(["configure","--defaults",f"group={RG}",f"workspace={WS}"])
-    subprocess.run(["az","ml","data","download","--name",name,"--version",version,"--download-path",out_dir],
-                   check=True)
-    csvs = glob.glob(f"{out_dir}/**/*.csv", recursive=True)
-    pars = glob.glob(f"{out_dir}/**/*.parquet", recursive=True)
+
+    sub_id = os.getenv("SUBSCRIPTION_ID")  # 워크플로에서 주입
+    rg = RG
+    ws = WS
+    assert sub_id and rg and ws, "SUBSCRIPTION_ID / AZ_RESOURCE_GROUP / AZ_ML_WORKSPACE 필요"
+
+    mlc = MLClient(AzureCliCredential(), sub_id, rg, ws)
+    print(f"[INFO] SDK download {name}:{version} -> {out_dir}")
+    mlc.data.download(name=name, version=version, download_path=out_dir)
+
+    # 다운로드된 파일에서 csv/parquet 하나 선택
+    csvs = glob.glob(os.path.join(out_dir, "**", "*.csv"), recursive=True)
+    pars = glob.glob(os.path.join(out_dir, "**", "*.parquet"), recursive=True)
     if csvs: return csvs[0]
     if pars: return pars[0]
     raise FileNotFoundError("csv/parquet 파일 없음")
