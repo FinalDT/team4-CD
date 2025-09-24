@@ -1,64 +1,42 @@
 name: Compare & Promote (CD)
-
 on:
   repository_dispatch:
     types: [model-staged]
   workflow_dispatch: {}
-
 jobs:
   cd:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: main
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-
       - name: Install Python dependencies
         shell: bash
-        run: |
-          set -euxo pipefail
-          python -m pip install --upgrade pip
-          # ✅ v2 SDK만 사용
-          pip install "azure-ai-ml>=1.19.0" "azure-identity>=1.16.0"
-          # 데이터/평가
-          pip install pandas numpy scikit-learn requests pyarrow
-
+        run: set -euxo pipefail && python -m pip install --upgrade pip && pip install "azure-ai-ml>=1.19.0" "azure-identity>=1.16.0" && pip install pandas numpy scikit-learn requests pyarrow
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_INFO }}
-
       - name: Export subscription id
         shell: bash
-        run: |
-          set -euxo pipefail
-          echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
-
+        run: set -euxo pipefail && echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
       - name: Compare & Promote
         env:
           AZ_RESOURCE_GROUP: "1dt-final-team4"
           AZ_ML_WORKSPACE:  "team4_ML"
-
-          # ✅ CSV(SAS) URL을 비밀로 넣으세요 (예: AML_DATA_CSV_URL)
           DATA_CSV_URL: ${{ secrets.AML_DATA_CSV_URL }}
-
           LABEL_COL: "realScore_clean"
-          FEATURE_COLS: "difficultyLevel_mean,discriminationLevel_mean,guessLevel_mean,theta_clean"  # 필요 시 지정
-
+          FEATURE_COLS: "difficultyLevel_mean,discriminationLevel_mean,guessLevel_mean,theta_clean"
           ENDPOINT_NAME: "team4-rt-ab"
           ENDPOINT_URL: "https://team4-rt-ab.eastus2.inference.ml.azure.com/score"
           API_KEY: ${{ secrets.AML_ENDPOINT_KEY }}
-
-          DEPLOYMENT_A: "predrealscore-1"   # Champion
-          DEPLOYMENT_B: "predrealscore-2"   # Challenger
-
+          DEPLOYMENT_A: "predrealscore-1"
+          DEPLOYMENT_B: "predrealscore-2"
           PROMOTE_RULE: "rmse<=0.98 and r2>=-0.01"
-        run: |
-          set -euxo pipefail
-          python scripts/compare_and_promote_from_data_asset.py
+          # ✅ 엔드포인트 score.py가 Designer 스타일을 기대하므로 기본값은 designer_raw
+          PAYLOAD_MODE: "designer_raw"   # columns | records | designer_raw
+        run: set -euxo pipefail && python scripts/compare_and_promote_from_data_asset.py
