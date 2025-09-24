@@ -46,12 +46,12 @@ def get_ml_client() -> MLClient:
 
 # ---------- 데이터 로드 (CSV URL) ----------
 def load_csv_from_url(url: str, label_col: str, feature_cols_csv: str | None):
-    # pandas가 직접 URL(SAS 포함)을 읽습니다.
     df = pd.read_csv(url)
 
     if label_col not in df.columns:
         raise RuntimeError(f"Label '{label_col}' not in dataset columns: {list(df.columns)}")
 
+    # 피처 컬럼 결정: 명시되면 그 순서/구성 고정, 아니면 라벨 제외 모두
     if feature_cols_csv:
         feats = [c.strip() for c in feature_cols_csv.split(",") if c.strip()]
         missing = [c for c in feats if c not in df.columns]
@@ -60,16 +60,29 @@ def load_csv_from_url(url: str, label_col: str, feature_cols_csv: str | None):
     else:
         feats = [c for c in df.columns if c != label_col]
 
-    try:
-        X = df[feats].apply(pd.to_numeric, errors="raise")
-        y = pd.to_numeric(df[label_col], errors="raise").values
-    except Exception as e:
-        raise RuntimeError(f"Non-numeric in features/label. Error: {e}")
+    # ✅ 라벨만 숫자로 변환, 변환 불가/결측 행은 드랍
+    y = pd.to_numeric(df[label_col], errors="coerce")
+    keep = y.notna()
+    dropped = (~keep).sum()
+    if dropped:
+        print(f"[WARN] Dropping {dropped} rows with non-numeric/NaN label '{label_col}'")
+    df = df.loc[keep].reset_index(drop=True)
+    y = y.loc[keep].astype(float).values
+
+    X = df[feats].copy()
+
+    # JSON 직렬화를 위해 datetime은 문자열로 변환
+    for c in X.select_dtypes(include=["datetime64[ns]", "datetime64[ns, UTC]"]).columns:
+        X[c] = X[c].dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    # 남은 NaN이 있으면(피처 결측) 일단 그대로 보냄: 모델 파이프라인이 처리한다면 OK
+    # 필요시: X = X.fillna(0) 등으로 조정 가능
 
     if len(X) == 0:
-        raise RuntimeError("Dataset is empty")
+        raise RuntimeError("Dataset is empty after label cleaning")
 
     return X, y, feats
+
 
 
 # ---------- 엔드포인트 호출 ----------
