@@ -28,7 +28,7 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}   # JSON 형태 {clientId, clientSecret, subscriptionId, tenantId}
+          creds: ${{ secrets.AZURE_INFO }}   # JSON 형태 {clientId, clientSecret, subscriptionId, tenantId}
 
       # 5. AML 기본값 세팅
       - name: Set defaults
