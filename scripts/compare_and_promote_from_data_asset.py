@@ -6,14 +6,13 @@ from sklearn.metrics import mean_squared_error, r2_score
 from azure.ai.ml import MLClient
 from azure.identity import AzureCliCredential, DefaultAzureCredential
 
-
 # ---------- 환경변수 ----------
 RG       = os.getenv("AZ_RESOURCE_GROUP")
 WS       = os.getenv("AZ_ML_WORKSPACE")
 SUB_ID   = os.getenv("SUBSCRIPTION_ID")
 
 # ✅ CSV 직접 사용 (SAS/HTTP URL)
-DATA_CSV_URL       = os.getenv("DATA_CSV_URL")   # 예: https://.../test_data/my.csv?sv=...
+DATA_CSV_URL       = os.getenv("DATA_CSV_URL")
 
 LABEL_COL          = os.getenv("LABEL_COL")
 FEATURE_COLS       = os.getenv("FEATURE_COLS")   # "col1,col2,..."
@@ -24,7 +23,6 @@ API_KEY            = os.getenv("API_KEY")
 DEPLOYMENT_A       = os.getenv("DEPLOYMENT_A")   # Champion
 DEPLOYMENT_B       = os.getenv("DEPLOYMENT_B")   # Challenger
 PROMOTE_RULE       = os.getenv("PROMOTE_RULE", "rmse<=0.98 and r2>=-0.01")
-
 
 # ---------- 유틸 ----------
 def _need(name: str):
@@ -42,7 +40,6 @@ def get_ml_client() -> MLClient:
         except Exception as e:
             last = e
     raise RuntimeError(f"Failed to create MLClient: {last}")
-
 
 # ---------- 데이터 로드 (CSV URL) ----------
 def load_csv_from_url(url: str, label_col: str, feature_cols_csv: str | None):
@@ -80,24 +77,30 @@ def load_csv_from_url(url: str, label_col: str, feature_cols_csv: str | None):
 
     return X, y, feats
 
-
-# ---------- 엔드포인트 호출 ----------
-def build_payload_columns(Xb: pd.DataFrame, cols: list[str]) -> dict:
+# ---------- 페이로드 빌더들 ----------
+def build_payload_columns(Xb: pd.DataFrame, cols: list[str]):
+    # {"input_data":{"columns":[...], "data":[...]}}
     return {"input_data": {"columns": list(cols), "data": Xb.values.tolist()}}
 
-def build_payload_records(Xb: pd.DataFrame) -> dict:
-    # NaN은 JSON 직렬화를 위해 None으로 바꿔줌
+def build_payload_records(Xb: pd.DataFrame, _cols: list[str] | None = None):
+    # {"data":[{...}, ...]}
     recs = Xb.where(pd.notna(Xb), None).to_dict(orient="records")
     return {"data": recs}
 
+def build_payload_designer_raw(Xb: pd.DataFrame, _cols: list[str] | None = None):
+    # ✅ Azure Designer score.py가 기대하는 포맷: 최상위가 list[dict]
+    return Xb.where(pd.notna(Xb), None).to_dict(orient="records")
+
+# ---------- 엔드포인트 호출 ----------
 def _parse_pred(res_json):
     if isinstance(res_json, dict):
         for k in ("output", "predictions", "result", "scores"):
             if k in res_json:
                 return np.array(res_json[k], dtype=float).reshape(-1)
+    # 일부 점수 스크립트는 그냥 리스트/스칼라 반환
     return np.array(res_json, dtype=float).reshape(-1)
 
-def call_endpoint(endpoint_url: str, api_key: str, deployment: str, payload: dict, timeout: int = 60) -> np.ndarray:
+def call_endpoint(endpoint_url: str, api_key: str, deployment: str, payload, timeout: int = 60) -> np.ndarray:
     _need("ENDPOINT_URL"); _need("API_KEY")
     headers = {
         "Content-Type": "application/json",
@@ -121,7 +124,6 @@ def batched_predict(X: pd.DataFrame, cols: list[str], infer_fn, payload_builder,
         i = j
     return out
 
-
 # ---------- 평가/의사결정 ----------
 def metrics(y, yhat):
     return {"rmse": mean_squared_error(y, yhat, squared=False),
@@ -138,7 +140,6 @@ def decide(champion: dict, challenger: dict, rule: str) -> bool:
     ok_r2   = challenger["r2"]   >= champion["r2"] + r2_delta
     return ok_rmse and ok_r2
 
-
 # ---------- 트래픽 전환 ----------
 def switch_traffic_sdk(mlc: MLClient, endpoint: str, a: str, a_pct: int, b: str, b_pct: int):
     print(f"[INFO] Switching traffic: {a}={a_pct}, {b}={b_pct}")
@@ -149,7 +150,6 @@ def switch_traffic_sdk(mlc: MLClient, endpoint: str, a: str, a_pct: int, b: str,
 def delete_deployment_sdk(mlc: MLClient, endpoint: str, deployment: str):
     print(f"[INFO] Deleting deployment: {deployment}")
     mlc.online_deployments.begin_delete(name=deployment, endpoint_name=endpoint).result()
-
 
 # ---------- 메인 ----------
 def main():
@@ -167,11 +167,13 @@ def main():
     print(f"[INFO] Rows={len(X)}, Features={len(feats)} -> {feats[:8]}{'...' if len(feats)>8 else ''}")
 
     # 2) 추론 모드 결정
-    payload_mode = os.getenv("PAYLOAD_MODE", "records").lower()
+    payload_mode = os.getenv("PAYLOAD_MODE", "designer_raw").lower()
     if payload_mode == "columns":
         payload_builder = lambda df, cols: build_payload_columns(df, cols)
-    else:
-        payload_builder = lambda df, cols: build_payload_records(df)  # ✅ 기본
+    elif payload_mode == "records":
+        payload_builder = lambda df, cols: build_payload_records(df, cols)
+    else:  # "designer_raw"
+        payload_builder = lambda df, cols: build_payload_designer_raw(df, cols)
 
     infer_A = lambda p: call_endpoint(ENDPOINT_URL, API_KEY, DEPLOYMENT_A, p)
     infer_B = lambda p: call_endpoint(ENDPOINT_URL, API_KEY, DEPLOYMENT_B, p)
