@@ -32,12 +32,13 @@ jobs:
 
       # 5. AML 기본값 세팅
       - name: Set defaults
-        run: |
-          az configure --defaults group=1dt-final-team4 workspace=team4_ML
+        run: az configure --defaults group=1dt-final-team4 workspace=team4_ML
 
       # 6. 모델 비교 및 승격 스크립트 실행
       - name: Compare & Promote
         env:
+          AZ_RESOURCE_GROUP: "1dt-final-team4"
+          AZ_ML_WORKSPACE:  "team4_ML"
           DATA_ASSET_NAME: "test_csv"
           DATA_ASSET_VERSION: "1"
           LABEL_COL: "realScore_clean"
