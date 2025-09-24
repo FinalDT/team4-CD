@@ -1,9 +1,13 @@
-import os, json, time, glob, subprocess, shutil
+import os, json, time, glob
 import numpy as np, pandas as pd, requests
 from sklearn.metrics import mean_squared_error, r2_score
 
+# v2 SDK (엔드포인트 조작용)
 from azure.ai.ml import MLClient
 from azure.identity import AzureCliCredential, DefaultAzureCredential
+
+# v1 SDK (Legacy Dataset 다운로드용)
+from azureml.core import Workspace, Dataset
 
 
 # ---------- 환경변수 ----------
@@ -35,7 +39,7 @@ def get_ml_client() -> MLClient:
     _need("SUBSCRIPTION_ID"); _need("AZ_RESOURCE_GROUP"); _need("AZ_ML_WORKSPACE")
     last = None
     for cred in (
-        AzureCliCredential(),  # azure/login 사용
+        AzureCliCredential(),  # actions에서 azure/login 사용
         DefaultAzureCredential(exclude_interactive_browser_credential=True),
     ):
         try:
@@ -44,42 +48,24 @@ def get_ml_client() -> MLClient:
             last = e
     raise RuntimeError(f"Failed to create MLClient: {last}")
 
-# ---------- 내부 유틸 ----------
-def _run(cmd: list[str]) -> str:
-    print(f"[CMD] {' '.join(cmd)}")
-    return subprocess.run(cmd, check=True, text=True, capture_output=True).stdout
-
-# ---------- 데이터 에셋 다운로드 (SDK 우선, CLI 폴백) ----------
+# ---------- 데이터 에셋 다운로드 (SDK v1: azureml-core) ----------
 def download_data_asset(name: str, version: str, out_dir: str = "./_aml_data") -> str:
+    """
+    test_csv 처럼 'Dataset type (from Azure ML v1 APIs)' 인 에셋은 v2 SDK로는 다운로드가 안 됩니다.
+    따라서 v1 SDK(azureml-core)의 Dataset.get_by_name(...).download() 를 사용합니다.
+    """
     if not name or not version:
         raise RuntimeError("DATA_ASSET_NAME and DATA_ASSET_VERSION are required")
-    os.makedirs(out_dir, exist_ok=True)
 
-    # 1) SDK 우선 시도
-    try:
-        mlc = get_ml_client()
-        if hasattr(mlc.data, "download"):
-            print(f"[INFO] SDK download {name}:{version} -> {out_dir}")
-            mlc.data.download(name=name, version=version, download_path=out_dir)
-        else:
-            raise AttributeError("mlc.data.download not available in this azure-ai-ml version")
-    except Exception as e:
-        print(f"[WARN] SDK download failed or not supported: {e}")
-        # 2) CLI 폴백 (확장 자동 설치/업그레이드)
-        if shutil.which("az") is None:
-            raise RuntimeError("Azure CLI (az) not found on PATH")
-        try:
-            _run(["az", "extension", "add", "-n", "ml", "--upgrade", "-y"])
-        except Exception:
-            # 이미 설치되어 있으면 통과
-            pass
-        print(f"[INFO] CLI download {name}:{version} -> {out_dir}")
-        _run([
-            "az","ml","data","download",
-            "--name", name,
-            "--version", version,
-            "--download-path", out_dir
-        ])
+    os.makedirs(out_dir, exist_ok=True)
+    print(f"[INFO] v1 SDK download {name}:{version} -> {out_dir}")
+
+    # v1 Workspace attach
+    ws = Workspace(subscription_id=SUB_ID, resource_group=RG, workspace_name=WS)
+
+    # 이름+버전으로 Dataset 검색 후 다운로드
+    ds = Dataset.get_by_name(workspace=ws, name=name, version=version)
+    ds.download(target_path=out_dir, overwrite=True)
 
     # 파일 선택
     csvs = glob.glob(os.path.join(out_dir, "**", "*.csv"), recursive=True)
@@ -90,7 +76,7 @@ def download_data_asset(name: str, version: str, out_dir: str = "./_aml_data") -
     if pars:
         print(f"[INFO] Using file: {pars[0]}")
         return pars[0]
-    raise FileNotFoundError(f"No csv/parquet found in {out_dir}")
+    raise FileNotFoundError(f"No csv/parquet found under {out_dir}")
 
 # ---------- 데이터 적재 ----------
 def load_dataset(path: str, label_col: str, feature_cols_csv: str | None):
@@ -168,7 +154,7 @@ def decide(champion: dict, challenger: dict, rule: str) -> bool:
     ok_r2   = challenger["r2"]   >= champion["r2"] + r2_delta
     return ok_rmse and ok_r2
 
-# ---------- 트래픽 전환/삭제 (SDK) ----------
+# ---------- 트래픽 전환/삭제 (SDK v2) ----------
 def switch_traffic_sdk(mlc: MLClient, endpoint: str, a: str, a_pct: int, b: str, b_pct: int):
     print(f"[INFO] Switching traffic: {a}={a_pct}, {b}={b_pct}")
     e = mlc.online_endpoints.get(name=endpoint)
@@ -191,7 +177,7 @@ def main():
 
     mlc = get_ml_client()
 
-    # 1) 데이터
+    # 1) 데이터 (v1 SDK로 다운로드)
     data_path = download_data_asset(DATA_ASSET_NAME, DATA_ASSET_VERSION)
     X, y, feats = load_dataset(data_path, LABEL_COL, FEATURE_COLS)
     print(f"[INFO] Rows={len(X)}, Features={len(feats)} -> {feats[:8]}{'...' if len(feats)>8 else ''}")
