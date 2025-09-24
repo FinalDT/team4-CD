@@ -43,7 +43,7 @@ def get_ml_client() -> MLClient:
             last = e
     raise RuntimeError(f"Failed to create MLClient: {last}")
 
-# ---------- 데이터 에셋 다운로드 (SDK) ----------
+# ---------- 데이터 에셋 다운로드 (SDK 전용) ----------
 def download_data_asset(name: str, version: str, out_dir: str = "./_aml_data") -> str:
     if not name or not version:
         raise RuntimeError("DATA_ASSET_NAME and DATA_ASSET_VERSION are required")
