@@ -49,7 +49,7 @@ jobs:
           DATA_CSV_URL: ${{ secrets.AML_DATA_CSV_URL }}
 
           LABEL_COL: "realScore_clean"
-          # FEATURE_COLS: "learnerID,testID,correct_cnt,items_attempted"  # 필요 시 지정
+          FEATURE_COLS: "learnerID,testID,correct_cnt,items_attempted"  # 필요 시 지정
 
           ENDPOINT_NAME: "team4-rt-ab"
           ENDPOINT_URL: "https://team4-rt-ab.eastus2.inference.ml.azure.com/score"
