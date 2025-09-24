@@ -2,44 +2,44 @@ name: Compare & Promote (CD)
 
 on:
   repository_dispatch:
-    types: [model-staged]   # Databricks에서 Webhook 발사 시 트리거
-  workflow_dispatch: {}      # (옵션) 수동 실행 버튼
+    types: [model-staged]   # Databricks Webhook 트리거
+  workflow_dispatch: {}     # 수동 실행
 
 jobs:
   cd:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. 코드 체크아웃
+      # 1) 코드 체크아웃
       - uses: actions/checkout@v4
 
-      # 2. Python 세팅
+      # 2) Python 세팅
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      # 3. 의존성 설치
-   
+      # 3) 의존성 설치 (SDK + 선택적으로 ML CLI 최신화)
       - name: Install dependencies
         run: |
-          pip install pandas numpy scikit-learn requests
-          # 먼저 제거 후 최신으로 재설치 (캐시/구버전 문제 방지)
+          pip install pandas numpy scikit-learn requests azure-ai-ml azure-identity
           az extension remove -n ml || true
           az extension add -n ml --upgrade -y
-          az extension show -n ml
 
-
-      # 4. Azure 로그인 (Service Principal 사용)
+      # 4) Azure 로그인 (Service Principal)
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_INFO }}   # JSON 형태 {clientId, clientSecret, subscriptionId, tenantId}
+          creds: ${{ secrets.AZURE_INFO }}   # {clientId, clientSecret, subscriptionId, tenantId}
 
-      # 5. AML 기본값 세팅
+      # 5) 구독/워크스페이스 기본값 세팅
       - name: Set defaults
         run: az configure --defaults group=1dt-final-team4 workspace=team4_ML
 
-      # 6. 모델 비교 및 승격 스크립트 실행
+      # 6) (로그인 후) 구독 ID를 JOB 환경변수로 내보내기
+      - name: Export subscription id to env
+        run: echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
+
+      # 7) 모델 비교 & 승격
       - name: Compare & Promote
         env:
           AZ_RESOURCE_GROUP: "1dt-final-team4"
@@ -53,4 +53,5 @@ jobs:
           DEPLOYMENT_A: "final0922-1"   # Champion
           DEPLOYMENT_B: "final0922-2"   # Challenger
           PROMOTE_RULE: "rmse<=0.98 and r2>=-0.01"
+          # SUBSCRIPTION_ID는 위 스텝에서 $GITHUB_ENV에 넣었으므로 여기서 자동으로 사용 가능
         run: python scripts/compare_and_promote_from_data_asset.py
