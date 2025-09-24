@@ -29,10 +29,13 @@ jobs:
           python -m pip install --upgrade pip
           # v2 SDK (엔드포인트 조작)
           pip install "azure-ai-ml>=1.19.0" "azure-identity>=1.16.0"
-          # v1 SDK (Legacy Dataset 다운로드)
-          pip install "azureml-core==1.54.0"
+          # v1 SDK (Legacy Dataset 다운로드) + 필수 런타임
+          pip install "azureml-core==1.54.0" "azureml-dataset-runtime==1.54.0"
+          # 인증 경고 해소
+          pip install "msal-extensions>=1.2.0"
           # 데이터/평가용
           pip install pandas numpy scikit-learn requests pyarrow
+      
 
       # 4) Azure 로그인 (Service Principal JSON)
       - name: Azure Login
