@@ -1,9 +1,10 @@
-import os, json, time, glob
+import os, json, time, glob, subprocess, shutil
 import numpy as np, pandas as pd, requests
 from sklearn.metrics import mean_squared_error, r2_score
 
 from azure.ai.ml import MLClient
 from azure.identity import AzureCliCredential, DefaultAzureCredential
+
 
 # ---------- 환경변수 ----------
 RG  = os.getenv("AZ_RESOURCE_GROUP")
@@ -43,14 +44,42 @@ def get_ml_client() -> MLClient:
             last = e
     raise RuntimeError(f"Failed to create MLClient: {last}")
 
-# ---------- 데이터 에셋 다운로드 (SDK 전용) ----------
+# ---------- 내부 유틸 ----------
+def _run(cmd: list[str]) -> str:
+    print(f"[CMD] {' '.join(cmd)}")
+    return subprocess.run(cmd, check=True, text=True, capture_output=True).stdout
+
+# ---------- 데이터 에셋 다운로드 (SDK 우선, CLI 폴백) ----------
 def download_data_asset(name: str, version: str, out_dir: str = "./_aml_data") -> str:
     if not name or not version:
         raise RuntimeError("DATA_ASSET_NAME and DATA_ASSET_VERSION are required")
     os.makedirs(out_dir, exist_ok=True)
-    mlc = get_ml_client()
-    print(f"[INFO] Downloading data asset {name}:{version} -> {out_dir}")
-    mlc.data.download(name=name, version=version, download_path=out_dir)
+
+    # 1) SDK 우선 시도
+    try:
+        mlc = get_ml_client()
+        if hasattr(mlc.data, "download"):
+            print(f"[INFO] SDK download {name}:{version} -> {out_dir}")
+            mlc.data.download(name=name, version=version, download_path=out_dir)
+        else:
+            raise AttributeError("mlc.data.download not available in this azure-ai-ml version")
+    except Exception as e:
+        print(f"[WARN] SDK download failed or not supported: {e}")
+        # 2) CLI 폴백 (확장 자동 설치/업그레이드)
+        if shutil.which("az") is None:
+            raise RuntimeError("Azure CLI (az) not found on PATH")
+        try:
+            _run(["az", "extension", "add", "-n", "ml", "--upgrade", "-y"])
+        except Exception:
+            # 이미 설치되어 있으면 통과
+            pass
+        print(f"[INFO] CLI download {name}:{version} -> {out_dir}")
+        _run([
+            "az","ml","data","download",
+            "--name", name,
+            "--version", version,
+            "--download-path", out_dir
+        ])
 
     # 파일 선택
     csvs = glob.glob(os.path.join(out_dir, "**", "*.csv"), recursive=True)
