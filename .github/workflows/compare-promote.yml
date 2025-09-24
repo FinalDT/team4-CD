@@ -19,10 +19,15 @@ jobs:
           python-version: "3.10"
 
       # 3. 의존성 설치
+   
       - name: Install dependencies
         run: |
           pip install pandas numpy scikit-learn requests
-          az extension add -n ml -y
+          # 먼저 제거 후 최신으로 재설치 (캐시/구버전 문제 방지)
+          az extension remove -n ml || true
+          az extension add -n ml --upgrade -y
+          az extension show -n ml
+
 
       # 4. Azure 로그인 (Service Principal 사용)
       - name: Azure Login
