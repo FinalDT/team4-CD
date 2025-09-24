@@ -1,0 +1,50 @@
+name: Compare & Promote (CD)
+
+on:
+  repository_dispatch:
+    types: [model-staged]   # Databricks에서 Webhook 발사 시 트리거
+  workflow_dispatch: {}      # (옵션) 수동 실행 버튼
+
+jobs:
+  cd:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 코드 체크아웃
+      - uses: actions/checkout@v4
+
+      # 2. Python 세팅
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # 3. 의존성 설치
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy scikit-learn requests
+          az extension add -n ml -y
+
+      # 4. Azure 로그인 (Service Principal 사용)
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}   # JSON 형태 {clientId, clientSecret, subscriptionId, tenantId}
+
+      # 5. AML 기본값 세팅
+      - name: Set defaults
+        run: |
+          az configure --defaults group=1dt-final-team4 workspace=team4_ML
+
+      # 6. 모델 비교 및 승격 스크립트 실행
+      - name: Compare & Promote
+        env:
+          DATA_ASSET_NAME: "test_csv"
+          DATA_ASSET_VERSION: "1"
+          LABEL_COL: "realScore_clean"
+          ENDPOINT_NAME: "team4-rt-ab"
+          ENDPOINT_URL: "https://team4-rt-ab.eastus2.inference.ml.azure.com/score"
+          API_KEY: ${{ secrets.AML_ENDPOINT_KEY }}
+          DEPLOYMENT_A: "final0922-1"   # Champion
+          DEPLOYMENT_B: "final0922-2"   # Challenger
+          PROMOTE_RULE: "rmse<=0.98 and r2>=-0.01"
+        run: python scripts/compare_and_promote_from_data_asset.py
