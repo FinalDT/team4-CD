@@ -1,24 +1,22 @@
-import os, json, time, glob
+import os, json, time
 import numpy as np, pandas as pd, requests
 from sklearn.metrics import mean_squared_error, r2_score
 
-# v2 SDK (엔드포인트 조작용)
+# v2 SDK (엔드포인트 트래픽 전환용)
 from azure.ai.ml import MLClient
 from azure.identity import AzureCliCredential, DefaultAzureCredential
 
-# v1 SDK (Legacy Dataset 다운로드용)
-from azureml.core import Workspace, Dataset
-
 
 # ---------- 환경변수 ----------
-RG  = os.getenv("AZ_RESOURCE_GROUP")
-WS  = os.getenv("AZ_ML_WORKSPACE")
-SUB_ID = os.getenv("SUBSCRIPTION_ID")
+RG       = os.getenv("AZ_RESOURCE_GROUP")
+WS       = os.getenv("AZ_ML_WORKSPACE")
+SUB_ID   = os.getenv("SUBSCRIPTION_ID")
 
-DATA_ASSET_NAME    = os.getenv("DATA_ASSET_NAME")
-DATA_ASSET_VERSION = os.getenv("DATA_ASSET_VERSION")
+# ✅ CSV 직접 사용 (SAS/HTTP URL)
+DATA_CSV_URL       = os.getenv("DATA_CSV_URL")   # 예: https://.../test_data/my.csv?sv=...
+
 LABEL_COL          = os.getenv("LABEL_COL")
-FEATURE_COLS       = os.getenv("FEATURE_COLS")
+FEATURE_COLS       = os.getenv("FEATURE_COLS")   # "col1,col2,..."
 
 ENDPOINT_NAME      = os.getenv("ENDPOINT_NAME")
 ENDPOINT_URL       = os.getenv("ENDPOINT_URL")
@@ -28,7 +26,7 @@ DEPLOYMENT_B       = os.getenv("DEPLOYMENT_B")   # Challenger
 PROMOTE_RULE       = os.getenv("PROMOTE_RULE", "rmse<=0.98 and r2>=-0.01")
 
 
-# ---------- 공통 ----------
+# ---------- 유틸 ----------
 def _need(name: str):
     v = os.getenv(name)
     if not v:
@@ -38,10 +36,7 @@ def _need(name: str):
 def get_ml_client() -> MLClient:
     _need("SUBSCRIPTION_ID"); _need("AZ_RESOURCE_GROUP"); _need("AZ_ML_WORKSPACE")
     last = None
-    for cred in (
-        AzureCliCredential(),  
-        DefaultAzureCredential(exclude_interactive_browser_credential=True),
-    ):
+    for cred in (AzureCliCredential(), DefaultAzureCredential(exclude_interactive_browser_credential=True)):
         try:
             return MLClient(cred, SUB_ID, RG, WS)
         except Exception as e:
@@ -49,33 +44,10 @@ def get_ml_client() -> MLClient:
     raise RuntimeError(f"Failed to create MLClient: {last}")
 
 
-# ---------- 데이터 에셋 다운로드 ----------
-def download_data_asset(name: str, version: str, out_dir: str = "./_aml_data") -> str:
-    """
-    test_csv 은 'Dataset type (from Azure ML v1 APIs)' 이므로 v1 SDK 필요.
-    """
-    if not name or not version:
-        raise RuntimeError("DATA_ASSET_NAME and DATA_ASSET_VERSION are required")
-
-    os.makedirs(out_dir, exist_ok=True)
-    print(f"[INFO] v1 SDK download {name}:{version} -> {out_dir}")
-
-    ws = Workspace(subscription_id=SUB_ID, resource_group=RG, workspace_name=WS)
-
-    ds = Dataset.get_by_name(workspace=ws, name=name, version=version)
-    ds.download(target_path=out_dir, overwrite=True)
-
-    # csv 기준으로 선택
-    csvs = glob.glob(os.path.join(out_dir, "**", "*.csv"), recursive=True)
-    if csvs:
-        print(f"[INFO] Using CSV file: {csvs[0]}")
-        return csvs[0]
-    raise FileNotFoundError(f"No csv found under {out_dir}")
-
-
-# ---------- 데이터 적재 ----------
-def load_dataset(path: str, label_col: str, feature_cols_csv: str | None):
-    df = pd.read_csv(path)   # ✅ CSV 기준
+# ---------- 데이터 로드 (CSV URL) ----------
+def load_csv_from_url(url: str, label_col: str, feature_cols_csv: str | None):
+    # pandas가 직접 URL(SAS 포함)을 읽습니다.
+    df = pd.read_csv(url)
 
     if label_col not in df.columns:
         raise RuntimeError(f"Label '{label_col}' not in dataset columns: {list(df.columns)}")
@@ -135,7 +107,7 @@ def batched_predict(X: pd.DataFrame, cols: list[str], infer_fn, bs: int = 256) -
     return out
 
 
-# ---------- 평가/승격 ----------
+# ---------- 평가/의사결정 ----------
 def metrics(y, yhat):
     return {"rmse": mean_squared_error(y, yhat, squared=False),
             "r2":   r2_score(y, yhat)}
@@ -168,17 +140,15 @@ def delete_deployment_sdk(mlc: MLClient, endpoint: str, deployment: str):
 def main():
     for env in [
         "AZ_RESOURCE_GROUP","AZ_ML_WORKSPACE","SUBSCRIPTION_ID",
-        "DATA_ASSET_NAME","DATA_ASSET_VERSION",
         "LABEL_COL","ENDPOINT_NAME","ENDPOINT_URL","API_KEY",
-        "DEPLOYMENT_A","DEPLOYMENT_B"
+        "DEPLOYMENT_A","DEPLOYMENT_B","DATA_CSV_URL"
     ]:
         _need(env)
 
     mlc = get_ml_client()
 
-    # 1) 데이터 다운로드
-    data_path = download_data_asset(DATA_ASSET_NAME, DATA_ASSET_VERSION)
-    X, y, feats = load_dataset(data_path, LABEL_COL, FEATURE_COLS)
+    # 1) 데이터 (CSV URL)
+    X, y, feats = load_csv_from_url(DATA_CSV_URL, LABEL_COL, FEATURE_COLS)
     print(f"[INFO] Rows={len(X)}, Features={len(feats)} -> {feats[:8]}{'...' if len(feats)>8 else ''}")
 
     # 2) 추론
@@ -192,7 +162,7 @@ def main():
     print(f"[METRIC] {DEPLOYMENT_A}: RMSE={mA['rmse']:.6f}, R2={mA['r2']:.6f}")
     print(f"[METRIC] {DEPLOYMENT_B}: RMSE={mB['rmse']:.6f}, R2={mB['r2']:.6f}")
 
-    # 4) 승격
+    # 4) 승격/롤백
     if decide(mA, mB, PROMOTE_RULE):
         print(f"[INFO] Challenger passes rule ({PROMOTE_RULE}). Progressive shift...")
         for a_pct, b_pct in [(90,10), (50,50), (0,100)]:
