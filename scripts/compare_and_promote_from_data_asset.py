@@ -75,19 +75,20 @@ def load_csv_from_url(url: str, label_col: str, feature_cols_csv: str | None):
     for c in X.select_dtypes(include=["datetime64[ns]", "datetime64[ns, UTC]"]).columns:
         X[c] = X[c].dt.strftime("%Y-%m-%d %H:%M:%S")
 
-    # 남은 NaN이 있으면(피처 결측) 일단 그대로 보냄: 모델 파이프라인이 처리한다면 OK
-    # 필요시: X = X.fillna(0) 등으로 조정 가능
-
     if len(X) == 0:
         raise RuntimeError("Dataset is empty after label cleaning")
 
     return X, y, feats
 
 
-
 # ---------- 엔드포인트 호출 ----------
-def build_payload(Xb: pd.DataFrame, cols: list[str]) -> dict:
+def build_payload_columns(Xb: pd.DataFrame, cols: list[str]) -> dict:
     return {"input_data": {"columns": list(cols), "data": Xb.values.tolist()}}
+
+def build_payload_records(Xb: pd.DataFrame) -> dict:
+    # NaN은 JSON 직렬화를 위해 None으로 바꿔줌
+    recs = Xb.where(pd.notna(Xb), None).to_dict(orient="records")
+    return {"data": recs}
 
 def _parse_pred(res_json):
     if isinstance(res_json, dict):
@@ -110,12 +111,13 @@ def call_endpoint(endpoint_url: str, api_key: str, deployment: str, payload: dic
         raise RuntimeError(f"Endpoint call failed ({deployment}): HTTP {resp.status_code} - {resp.text[:500]}") from e
     return _parse_pred(resp.json())
 
-def batched_predict(X: pd.DataFrame, cols: list[str], infer_fn, bs: int = 256) -> np.ndarray:
+def batched_predict(X: pd.DataFrame, cols: list[str], infer_fn, payload_builder, bs: int = 256) -> np.ndarray:
     out = np.empty(len(X), dtype=float)
     i = 0
     while i < len(X):
         j = min(i + bs, len(X))
-        out[i:j] = infer_fn(build_payload(X.iloc[i:j], cols))
+        payload = payload_builder(X.iloc[i:j], cols)
+        out[i:j] = infer_fn(payload)
         i = j
     return out
 
@@ -164,11 +166,18 @@ def main():
     X, y, feats = load_csv_from_url(DATA_CSV_URL, LABEL_COL, FEATURE_COLS)
     print(f"[INFO] Rows={len(X)}, Features={len(feats)} -> {feats[:8]}{'...' if len(feats)>8 else ''}")
 
-    # 2) 추론
+    # 2) 추론 모드 결정
+    payload_mode = os.getenv("PAYLOAD_MODE", "records").lower()
+    if payload_mode == "columns":
+        payload_builder = lambda df, cols: build_payload_columns(df, cols)
+    else:
+        payload_builder = lambda df, cols: build_payload_records(df)  # ✅ 기본
+
     infer_A = lambda p: call_endpoint(ENDPOINT_URL, API_KEY, DEPLOYMENT_A, p)
     infer_B = lambda p: call_endpoint(ENDPOINT_URL, API_KEY, DEPLOYMENT_B, p)
-    yhat_A = batched_predict(X, feats, infer_A)
-    yhat_B = batched_predict(X, feats, infer_B)
+
+    yhat_A = batched_predict(X, feats, infer_A, payload_builder)
+    yhat_B = batched_predict(X, feats, infer_B, payload_builder)
 
     # 3) 메트릭
     mA = metrics(y, yhat_A); mB = metrics(y, yhat_B)
