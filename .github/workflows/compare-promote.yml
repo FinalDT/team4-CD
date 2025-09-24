@@ -2,8 +2,8 @@ name: Compare & Promote (CD)
 
 on:
   repository_dispatch:
-    types: [model-staged]   # Databricks Webhook 트리거
-  workflow_dispatch: {}     # 수동 실행
+    types: [model-staged]
+  workflow_dispatch: {}
 
 jobs:
   cd:
@@ -18,36 +18,22 @@ jobs:
         with:
           python-version: "3.10"
 
-      # 3) 의존성 설치 (버전 고정 + pip 업그레이드)
+      # 3) 의존성 설치 (SDK만 사용하므로 CLI 확장 불필요)
       - name: Install Python dependencies
         shell: bash
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
-          # SDK는 안정 버전대로 고정 (2.0 이전)
           pip install "azure-ai-ml>=1.12.0,<2.0.0" "azure-identity>=1.15.0,<2.0.0"
-          pip install pandas numpy scikit-learn requests
+          pip install pandas numpy scikit-learn requests pyarrow
 
-      # 4) Azure CLI 확장(ml) 최신화 - SDK로 다운로드하되,
-      #    아래 단계에서 endpoint 트래픽 전환/삭제에 CLI를 쓰므로 최신 보장
-      - name: Ensure Azure CLI ML extension
-        shell: bash
-        run: |
-          set -euxo pipefail
-          az upgrade --yes || true
-          az extension remove -n ml || true
-          az extension add -n ml --upgrade -y
-          az version
-          az ml -h >/dev/null
-          az ml online-endpoint -h >/dev/null
-
-      # 5) Azure 로그인 (Service Principal JSON 시크릿)
+      # 4) Azure 로그인 (Service Principal JSON)
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_INFO }}   # {"clientId": "...","clientSecret":"...","subscriptionId":"...","tenantId":"..."}
+          creds: ${{ secrets.AZURE_INFO }}
 
-      # 6) 기본 구독/리소스그룹/워크스페이스 설정 & 구독ID 노출
+      # 5) 기본값 설정 + 구독ID 환경변수로 노출
       - name: Set defaults & export subscription id
         shell: bash
         run: |
@@ -56,32 +42,35 @@ jobs:
           echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
           az account show
 
+      # 6) 스크립트 가드 (CLI 다운로드 호출 잔재 차단)
+      - name: Sanity check: script guard
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "==== script head ===="
+          sed -n '1,120p' scripts/compare_and_promote_from_data_asset.py || true
+          echo "==== grep for forbidden CLI download ===="
+          ! grep -R "az[[:space:]]\+ml[[:space:]]\+data[[:space:]]\+download" -n scripts || (echo "ERROR: CLI download still present"; exit 1)
+
       # 7) 비교 & 승격 실행
       - name: Compare & Promote
         env:
-          # Azure 리소스 컨텍스트
           AZ_RESOURCE_GROUP: "1dt-final-team4"
           AZ_ML_WORKSPACE:  "team4_ML"
 
-          # 데이터 에셋 (SDK로 다운로드)
           DATA_ASSET_NAME: "test_csv"
           DATA_ASSET_VERSION: "1"
 
-          # 라벨/피처
           LABEL_COL: "realScore_clean"
-          # FEATURE_COLS를 비우면(label 제외한 전체 컬럼) 자동 사용. 필요시 콤마로 지정:
-          # FEATURE_COLS: "f1,f2,f3"
+          # FEATURE_COLS: "col1,col2,..."  # 필요시 지정(미지정 시 label 제외 전체 사용)
 
-          # 엔드포인트 호출 설정 (키 기반)
           ENDPOINT_NAME: "team4-rt-ab"
           ENDPOINT_URL: "https://team4-rt-ab.eastus2.inference.ml.azure.com/score"
           API_KEY: ${{ secrets.AML_ENDPOINT_KEY }}
 
-          # 배포 슬롯
           DEPLOYMENT_A: "final0922-1"   # Champion
           DEPLOYMENT_B: "final0922-2"   # Challenger
 
-          # 승격 규칙 (챌린저가 챔피언 대비 허용 기준)
           PROMOTE_RULE: "rmse<=0.98 and r2>=-0.01"
         run: |
           set -euxo pipefail
