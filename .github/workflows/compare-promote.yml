@@ -21,17 +21,18 @@ jobs:
         with:
           python-version: "3.10"
 
-      # 3) 의존성 설치 (SDK 전용)
-      # .github/workflows/compare-promote.yml
+      # 3) 의존성 설치 (v1+v2 함께 사용)
       - name: Install Python dependencies
         shell: bash
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
+          # v2 SDK (엔드포인트 조작)
           pip install "azure-ai-ml>=1.19.0" "azure-identity>=1.16.0"
+          # v1 SDK (Legacy Dataset 다운로드)
+          pip install "azureml-core==1.54.0"
+          # 데이터/평가용
           pip install pandas numpy scikit-learn requests pyarrow
-
-
 
       # 4) Azure 로그인 (Service Principal JSON)
       - name: Azure Login
@@ -39,17 +40,15 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_INFO }}
 
-      # 5) 기본값 설정 + 구독ID 환경변수로 노출
-      - name: Set defaults & export subscription id
+      # 5) 구독ID 환경변수로 노출 (v1/v2 공통)
+      - name: Export subscription id
         shell: bash
         run: |
           set -euxo pipefail
-          az configure --defaults group=1dt-final-team4 workspace=team4_ML
           echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
           az account show
 
-
-      # 7) 비교 & 승격 실행
+      # 6) 비교 & 승격 실행
       - name: Compare & Promote
         env:
           AZ_RESOURCE_GROUP: "1dt-final-team4"
