@@ -18,40 +18,71 @@ jobs:
         with:
           python-version: "3.10"
 
-      # 3) 의존성 설치 (SDK + 선택적으로 ML CLI 최신화)
-      - name: Install dependencies
+      # 3) 의존성 설치 (버전 고정 + pip 업그레이드)
+      - name: Install Python dependencies
+        shell: bash
         run: |
-          pip install pandas numpy scikit-learn requests azure-ai-ml azure-identity
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          # SDK는 안정 버전대로 고정 (2.0 이전)
+          pip install "azure-ai-ml>=1.12.0,<2.0.0" "azure-identity>=1.15.0,<2.0.0"
+          pip install pandas numpy scikit-learn requests
+
+      # 4) Azure CLI 확장(ml) 최신화 - SDK로 다운로드하되,
+      #    아래 단계에서 endpoint 트래픽 전환/삭제에 CLI를 쓰므로 최신 보장
+      - name: Ensure Azure CLI ML extension
+        shell: bash
+        run: |
+          set -euxo pipefail
+          az upgrade --yes || true
           az extension remove -n ml || true
           az extension add -n ml --upgrade -y
+          az version
+          az ml -h >/dev/null
+          az ml online-endpoint -h >/dev/null
 
-      # 4) Azure 로그인 (Service Principal)
+      # 5) Azure 로그인 (Service Principal JSON 시크릿)
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_INFO }}   # {clientId, clientSecret, subscriptionId, tenantId}
+          creds: ${{ secrets.AZURE_INFO }}   # {"clientId": "...","clientSecret":"...","subscriptionId":"...","tenantId":"..."}
 
-      # 5) 구독/워크스페이스 기본값 세팅
-      - name: Set defaults
-        run: az configure --defaults group=1dt-final-team4 workspace=team4_ML
+      # 6) 기본 구독/리소스그룹/워크스페이스 설정 & 구독ID 노출
+      - name: Set defaults & export subscription id
+        shell: bash
+        run: |
+          set -euxo pipefail
+          az configure --defaults group=1dt-final-team4 workspace=team4_ML
+          echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
+          az account show
 
-      # 6) (로그인 후) 구독 ID를 JOB 환경변수로 내보내기
-      - name: Export subscription id to env
-        run: echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
-
-      # 7) 모델 비교 & 승격
+      # 7) 비교 & 승격 실행
       - name: Compare & Promote
         env:
+          # Azure 리소스 컨텍스트
           AZ_RESOURCE_GROUP: "1dt-final-team4"
           AZ_ML_WORKSPACE:  "team4_ML"
+
+          # 데이터 에셋 (SDK로 다운로드)
           DATA_ASSET_NAME: "test_csv"
           DATA_ASSET_VERSION: "1"
+
+          # 라벨/피처
           LABEL_COL: "realScore_clean"
+          # FEATURE_COLS를 비우면(label 제외한 전체 컬럼) 자동 사용. 필요시 콤마로 지정:
+          # FEATURE_COLS: "f1,f2,f3"
+
+          # 엔드포인트 호출 설정 (키 기반)
           ENDPOINT_NAME: "team4-rt-ab"
           ENDPOINT_URL: "https://team4-rt-ab.eastus2.inference.ml.azure.com/score"
           API_KEY: ${{ secrets.AML_ENDPOINT_KEY }}
+
+          # 배포 슬롯
           DEPLOYMENT_A: "final0922-1"   # Champion
           DEPLOYMENT_B: "final0922-2"   # Challenger
+
+          # 승격 규칙 (챌린저가 챔피언 대비 허용 기준)
           PROMOTE_RULE: "rmse<=0.98 and r2>=-0.01"
-          # SUBSCRIPTION_ID는 위 스텝에서 $GITHUB_ENV에 넣었으므로 여기서 자동으로 사용 가능
-        run: python scripts/compare_and_promote_from_data_asset.py
+        run: |
+          set -euxo pipefail
+          python scripts/compare_and_promote_from_data_asset.py
