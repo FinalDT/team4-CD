@@ -39,7 +39,7 @@ def get_ml_client() -> MLClient:
     _need("SUBSCRIPTION_ID"); _need("AZ_RESOURCE_GROUP"); _need("AZ_ML_WORKSPACE")
     last = None
     for cred in (
-        AzureCliCredential(),  # actions에서 azure/login 사용
+        AzureCliCredential(),  
         DefaultAzureCredential(exclude_interactive_browser_credential=True),
     ):
         try:
@@ -48,11 +48,11 @@ def get_ml_client() -> MLClient:
             last = e
     raise RuntimeError(f"Failed to create MLClient: {last}")
 
-# ---------- 데이터 에셋 다운로드 (SDK v1: azureml-core) ----------
+
+# ---------- 데이터 에셋 다운로드 ----------
 def download_data_asset(name: str, version: str, out_dir: str = "./_aml_data") -> str:
     """
-    test_csv 처럼 'Dataset type (from Azure ML v1 APIs)' 인 에셋은 v2 SDK로는 다운로드가 안 됩니다.
-    따라서 v1 SDK(azureml-core)의 Dataset.get_by_name(...).download() 를 사용합니다.
+    test_csv 은 'Dataset type (from Azure ML v1 APIs)' 이므로 v1 SDK 필요.
     """
     if not name or not version:
         raise RuntimeError("DATA_ASSET_NAME and DATA_ASSET_VERSION are required")
@@ -60,27 +60,22 @@ def download_data_asset(name: str, version: str, out_dir: str = "./_aml_data") -
     os.makedirs(out_dir, exist_ok=True)
     print(f"[INFO] v1 SDK download {name}:{version} -> {out_dir}")
 
-    # v1 Workspace attach
     ws = Workspace(subscription_id=SUB_ID, resource_group=RG, workspace_name=WS)
 
-    # 이름+버전으로 Dataset 검색 후 다운로드
     ds = Dataset.get_by_name(workspace=ws, name=name, version=version)
     ds.download(target_path=out_dir, overwrite=True)
 
-    # 파일 선택
+    # csv 기준으로 선택
     csvs = glob.glob(os.path.join(out_dir, "**", "*.csv"), recursive=True)
-    pars = glob.glob(os.path.join(out_dir, "**", "*.parquet"), recursive=True)
     if csvs:
-        print(f"[INFO] Using file: {csvs[0]}")
+        print(f"[INFO] Using CSV file: {csvs[0]}")
         return csvs[0]
-    if pars:
-        print(f"[INFO] Using file: {pars[0]}")
-        return pars[0]
-    raise FileNotFoundError(f"No csv/parquet found under {out_dir}")
+    raise FileNotFoundError(f"No csv found under {out_dir}")
+
 
 # ---------- 데이터 적재 ----------
 def load_dataset(path: str, label_col: str, feature_cols_csv: str | None):
-    df = pd.read_parquet(path) if path.endswith(".parquet") else pd.read_csv(path)
+    df = pd.read_csv(path)   # ✅ CSV 기준
 
     if label_col not in df.columns:
         raise RuntimeError(f"Label '{label_col}' not in dataset columns: {list(df.columns)}")
@@ -97,12 +92,13 @@ def load_dataset(path: str, label_col: str, feature_cols_csv: str | None):
         X = df[feats].apply(pd.to_numeric, errors="raise")
         y = pd.to_numeric(df[label_col], errors="raise").values
     except Exception as e:
-        raise RuntimeError(f"Non-numeric in features/label. Clean data or set FEATURE_COLS. Error: {e}")
+        raise RuntimeError(f"Non-numeric in features/label. Error: {e}")
 
     if len(X) == 0:
         raise RuntimeError("Dataset is empty")
 
     return X, y, feats
+
 
 # ---------- 엔드포인트 호출 ----------
 def build_payload(Xb: pd.DataFrame, cols: list[str]) -> dict:
@@ -138,7 +134,8 @@ def batched_predict(X: pd.DataFrame, cols: list[str], infer_fn, bs: int = 256) -
         i = j
     return out
 
-# ---------- 평가/의사결정 ----------
+
+# ---------- 평가/승격 ----------
 def metrics(y, yhat):
     return {"rmse": mean_squared_error(y, yhat, squared=False),
             "r2":   r2_score(y, yhat)}
@@ -154,7 +151,8 @@ def decide(champion: dict, challenger: dict, rule: str) -> bool:
     ok_r2   = challenger["r2"]   >= champion["r2"] + r2_delta
     return ok_rmse and ok_r2
 
-# ---------- 트래픽 전환/삭제 (SDK v2) ----------
+
+# ---------- 트래픽 전환 ----------
 def switch_traffic_sdk(mlc: MLClient, endpoint: str, a: str, a_pct: int, b: str, b_pct: int):
     print(f"[INFO] Switching traffic: {a}={a_pct}, {b}={b_pct}")
     e = mlc.online_endpoints.get(name=endpoint)
@@ -164,6 +162,7 @@ def switch_traffic_sdk(mlc: MLClient, endpoint: str, a: str, a_pct: int, b: str,
 def delete_deployment_sdk(mlc: MLClient, endpoint: str, deployment: str):
     print(f"[INFO] Deleting deployment: {deployment}")
     mlc.online_deployments.begin_delete(name=deployment, endpoint_name=endpoint).result()
+
 
 # ---------- 메인 ----------
 def main():
@@ -177,7 +176,7 @@ def main():
 
     mlc = get_ml_client()
 
-    # 1) 데이터 (v1 SDK로 다운로드)
+    # 1) 데이터 다운로드
     data_path = download_data_asset(DATA_ASSET_NAME, DATA_ASSET_VERSION)
     X, y, feats = load_dataset(data_path, LABEL_COL, FEATURE_COLS)
     print(f"[INFO] Rows={len(X)}, Features={len(feats)} -> {feats[:8]}{'...' if len(feats)>8 else ''}")
@@ -193,7 +192,7 @@ def main():
     print(f"[METRIC] {DEPLOYMENT_A}: RMSE={mA['rmse']:.6f}, R2={mA['r2']:.6f}")
     print(f"[METRIC] {DEPLOYMENT_B}: RMSE={mB['rmse']:.6f}, R2={mB['r2']:.6f}")
 
-    # 4) 승격/롤백
+    # 4) 승격
     if decide(mA, mB, PROMOTE_RULE):
         print(f"[INFO] Challenger passes rule ({PROMOTE_RULE}). Progressive shift...")
         for a_pct, b_pct in [(90,10), (50,50), (0,100)]:
