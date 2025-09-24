@@ -24,9 +24,9 @@ jobs:
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
+          # ✅ v2 SDK만 사용
           pip install "azure-ai-ml>=1.19.0" "azure-identity>=1.16.0"
-          pip install "azureml-core==1.54.0" "azureml-dataset-runtime==1.54.0"
-          pip install "msal-extensions>=1.2.0"
+          # 데이터/평가
           pip install pandas numpy scikit-learn requests pyarrow
 
       - name: Azure Login
@@ -39,25 +39,24 @@ jobs:
         run: |
           set -euxo pipefail
           echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
-          az account show
 
       - name: Compare & Promote
         env:
           AZ_RESOURCE_GROUP: "1dt-final-team4"
           AZ_ML_WORKSPACE:  "team4_ML"
 
-          DATA_ASSET_NAME: "test_csv"
-          DATA_ASSET_VERSION: "1"
+          # ✅ CSV(SAS) URL을 비밀로 넣으세요 (예: AML_DATA_CSV_URL)
+          DATA_CSV_URL: ${{ secrets.AML_DATA_CSV_URL }}
 
           LABEL_COL: "realScore_clean"
-          # FEATURE_COLS: "col1,col2,..."  
+          # FEATURE_COLS: "col1,col2,..."  # 필요 시 지정
 
           ENDPOINT_NAME: "team4-rt-ab"
           ENDPOINT_URL: "https://team4-rt-ab.eastus2.inference.ml.azure.com/score"
           API_KEY: ${{ secrets.AML_ENDPOINT_KEY }}
 
-          DEPLOYMENT_A: "predrealscore-1"
-          DEPLOYMENT_B: "predrealscore-2"
+          DEPLOYMENT_A: "predrealscore-1"   # Champion
+          DEPLOYMENT_B: "predrealscore-2"   # Challenger
 
           PROMOTE_RULE: "rmse<=0.98 and r2>=-0.01"
         run: |
