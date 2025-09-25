@@ -35,8 +35,8 @@ jobs:
           ENDPOINT_NAME: "team4-rt-ab"
           ENDPOINT_URL: "https://team4-rt-ab.eastus2.inference.ml.azure.com/score"
           API_KEY: ${{ secrets.AML_ENDPOINT_KEY }}
-          DEPLOYMENT_A: "predrealscore-1"
-          DEPLOYMENT_B: "predrealscore-2"
+          DEPLOYMENT_A: "predrealscore-3"
+          DEPLOYMENT_B: "predrealscore-4"
           PROMOTE_RULE: "rmse<=0.98 and r2>=-0.01"
           # ✅ 자동 탐지: designer_raw → columns → records 순으로 스모크 테스트 후 고정
           PAYLOAD_MODE: "adaptive"   # adaptive | columns | records | designer_raw
