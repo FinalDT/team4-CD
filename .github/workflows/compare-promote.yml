@@ -24,10 +24,10 @@ jobs:
       - name: Export subscription id
         shell: bash
         run: set -euxo pipefail && echo "SUBSCRIPTION_ID=$(az account show --query id -o tsv)" >> $GITHUB_ENV
-      - name: Compare & Promote
+      - name: Compare & Promote (adaptive payload + schema/type fixes)
         env:
           AZ_RESOURCE_GROUP: "1dt-final-team4"
-          AZ_ML_WORKSPACE:  "team4_ML"
+          AZ_ML_WORKSPACE: "team4_ML"
           DATA_CSV_URL: ${{ secrets.AML_DATA_CSV_URL }}
           LABEL_COL: "realScore_clean"
           FEATURE_COLS: "difficultyLevel_mean,discriminationLevel_mean,guessLevel_mean,theta_clean,realScore_clean,accuracy,gender-F,gender-M,grade-7,grade-8,grade-9"
@@ -37,6 +37,6 @@ jobs:
           DEPLOYMENT_A: "predrealscore-1"
           DEPLOYMENT_B: "predrealscore-2"
           PROMOTE_RULE: "rmse<=0.98 and r2>=-0.01"
-          # ✅ 엔드포인트 score.py가 Designer 스타일을 기대하므로 기본값은 designer_raw
-          PAYLOAD_MODE: "designer_raw"   # columns | records | designer_raw
+          # ✅ 자동 탐지: designer_raw → columns → records 순으로 스모크 테스트 후 고정
+          PAYLOAD_MODE: "adaptive" # adaptive | columns | records | designer_raw
         run: set -euxo pipefail && python scripts/compare_and_promote_from_data_asset.py
